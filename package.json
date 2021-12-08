@@ -1,0 +1,23 @@
+{
+  "name": "vvs_autocompounder",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "prebuild": "tslint -c tslint.json -p tsconfig.json --fix",
+    "build": "tsc",
+    "prestart": "npm run build",
+    "start": "node .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/node": "^16.11.12",
+    "dotenv": "^10.0.0",
+    "ethers": "^5.5.2",
+    "tslint": "^6.1.3",
+    "typescript": "^4.5.2"
+  }
+}
