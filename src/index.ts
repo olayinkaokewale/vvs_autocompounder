@@ -25,7 +25,7 @@ const POOL_ID = 5; // Pool ID for VVS-USDC Farm Pool
 const harvestFromFarm = async () => {
     try {
         // This will harvest the VVS from the pool
-        const response = await CraftsmanContract.deposit(POOL_ID, 0);
+        const response = await CraftsmanContract.deposit(POOL_ID, 0, { gasLimit: 200000 });
         Logger.log(response);
         const { hash } = response;
 
@@ -173,7 +173,7 @@ const depositToFarm = async () => {
         const getVVSLPBalance = await VVSLPTokenContract.balanceOf(account.address);
         Logger.log(BN2Str(getVVSLPBalance), "<== VVS LP Amount");
         // return;
-        const response = await CraftsmanContract.deposit(POOL_ID, getVVSLPBalance);
+        const response = await CraftsmanContract.deposit(POOL_ID, getVVSLPBalance, { gasLimit: 200000 });
         Logger.log(response, "<== Deposit successful");
         const { hash } = response;
 
@@ -191,7 +191,7 @@ const depositToFarm = async () => {
 const main = async () => {
     try {
         // 1. First harvest from LP farm
-        // await harvestFromFarm();
+        await harvestFromFarm();
         // 2. Swap tokens
         await swapHalfVVSForUSDC();
         // 3. Add Liquidity
