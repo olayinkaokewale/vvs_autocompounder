@@ -1,15 +1,15 @@
 import { config } from 'dotenv';
 config();
 
-import { providers, Wallet, BigNumber, utils } from 'ethers';
-import { CraftsmanContract, ERC20Interface, tokens, VVSRouterContract } from './abis';
-
-import { CHAIN_ID, PK, RPC_URL } from "./utils/config";
+import { BigNumber, BigNumberish } from 'ethers';
+import { account, chainProvider, CraftsmanContract, ERC20Interface, tokens, VVSPairInterface, VVSRouterContract } from './abis';
 import Logger from "./utils/logger";
 
-const chainProvider = new providers.JsonRpcProvider(RPC_URL, { chainId: Number(CHAIN_ID), name:"Cronos" });
-const account = new Wallet(PK, chainProvider);
+const NO_OF_BLOCK_CONFIRMATIONS = 10;
 
+const BN2Str = (_bn:BigNumberish) => {
+    return BigNumber.from(_bn).toString();
+}
 
 // Test if it is going
 chainProvider.getBlockNumber().then((result) => {
@@ -18,55 +18,25 @@ chainProvider.getBlockNumber().then((result) => {
 });
 // Done
 
-/* const testCraftsman = async () => {
-    try {
-        const response = await CraftsmanContract.poolLength();
-        Logger.log(BigNumber.from(response).toString());
-    } catch(err) {
-        Logger.log(err, "<== Error");
-    }
-}
-
-testCraftsman(); */
-
-/* const testRouter = async () => {
-    try {
-
-        const VVSTokenContract = await ERC20Interface(tokens.VVS.address);
-        const response2 = await VVSTokenContract.balanceOf('0x82F25c3343E8ab407319De8DfE20f9925cEcb8Eb');
-        const halfedVVSAmount = BigNumber.from(response2).div(2).toString();
-        Logger.log(halfedVVSAmount, "<== Halfed Amount in Account");
-
-        const response = await VVSRouterContract.getAmountsOut(halfedVVSAmount,  [tokens.VVS.address, tokens.USDC.address ]);
-        if (response && response.length > 0) {
-            response.forEach((res:any, id:number) => {
-                Logger.log(BigNumber.from(res).toString(), "<==", id);
-            });
-        }
-        const [ amountIn, amountOut ] = response;
-        Logger.log(BigNumber.from(amountOut).div(1000).mul(995).toString(), "// 0.5% slippage");
-
-    } catch(err) {
-        Logger.log(err, "<== Error");
-    }
-}
-
-testRouter(); */
-
 // Now create all the functions here according to step in todo file
 
 // 1. Function to harvest from the LP farm
 const POOL_ID = 5; // Pool ID for VVS-USDC Farm Pool
-const harvestFromLp = async () => {
+const harvestFromFarm = async () => {
     try {
         // This will harvest the VVS from the pool
         const response = await CraftsmanContract.deposit(POOL_ID, 0);
         Logger.log(response);
-        return {
-            response
-        }
+        const { hash } = response;
+
+        Logger.log(`Waiting for ${NO_OF_BLOCK_CONFIRMATIONS} confirmations...`);
+        const txMined = await chainProvider.waitForTransaction(hash, NO_OF_BLOCK_CONFIRMATIONS);
+        Logger.log(`${NO_OF_BLOCK_CONFIRMATIONS} blocks confirmed`);
+
+        if (txMined.status !== 1) throw new Error("Mining Failed");
+        return { response };
     } catch(err) {
-        Logger.log(err, "<== Error");
+        Logger.log(err, "<== Harvest LP Error");
     }
 }
 
@@ -108,6 +78,14 @@ const swapHalfVVSForUSDC = async () => {
             Math.floor(Date.now()/1000) + (20*60) // 20 minutes from now
         );
         Logger.log(swapTokens, "<== SWAP VVS-USDC successful");
+
+        const { hash } = swapTokens;
+
+        Logger.log(`Waiting for ${NO_OF_BLOCK_CONFIRMATIONS} confirmations...`);
+        const txMined = await chainProvider.waitForTransaction(hash, NO_OF_BLOCK_CONFIRMATIONS);
+        Logger.log(`${NO_OF_BLOCK_CONFIRMATIONS} blocks confirmed`);
+
+        if (txMined.status !== 1) throw new Error("Mining Failed");
         return {
             amountInStr,
             minAmountOut,
@@ -119,16 +97,118 @@ const swapHalfVVSForUSDC = async () => {
     }
 }
 
+// 3. Add to liquidity pool
+const addVVSUSDCLP = async () => {
+    try {
+        const VVSUSDCPair = [tokens.VVS.address, tokens.USDC.address];
+        const VVSTokenContract = await ERC20Interface(tokens.VVS.address);
+        const USDCTokenContract = await ERC20Interface(tokens.USDC.address);
+        const VVSUSDCPairContract = await VVSPairInterface(tokens.VVSLP.address);
+        // Step 1: Get the amount of USDC inside this account
+        const getUSDCAmount = await USDCTokenContract.balanceOf(account.address);
+        const getVVSAmount = await VVSTokenContract.balanceOf(account.address);
+
+        // Step 2: Get the amount needed to be passed in for LP
+        const reserves = await VVSUSDCPairContract.getReserves();
+        const [ reserveA, reserveB ] = reserves;
+
+        const quoteVVS = await VVSRouterContract.quote(getUSDCAmount, reserveB, reserveA);
+        const quoteUSDC = await VVSRouterContract.quote(getVVSAmount, reserveA, reserveB);
+
+        let amountADesired;
+        let amountBDesired;
+        if (BigNumber.from(getVVSAmount).gte(quoteVVS)) {
+            amountADesired = quoteVVS;
+            amountBDesired = getUSDCAmount;
+        } else {
+            amountADesired = getVVSAmount;
+            amountBDesired = quoteUSDC;
+        }
+
+        const amountAMin = BigNumber.from(amountADesired).mul(995).div(1000); // 0.5% slippage
+        const amountBMin = BigNumber.from(amountBDesired).mul(995).div(1000); // 0.5% slippage
+
+        Logger.log({
+            tokenA: VVSUSDCPair[0],
+            tokenB: VVSUSDCPair[1],
+            amountADesired: BN2Str(amountADesired),
+            amountBDesired: BN2Str(amountBDesired),
+            amountAMin: BN2Str(amountAMin),
+            amountBMin: BN2Str(amountBMin),
+            to: account.address,
+            deadline: Math.floor(Date.now()/1000) + (20*60) // 20 minutes from now
+        });
+        // return;
+
+        const addLiquidity = await VVSRouterContract.addLiquidity(
+            VVSUSDCPair[0],
+            VVSUSDCPair[1],
+            amountADesired,
+            amountBDesired,
+            amountAMin,
+            amountBMin,
+            account.address,
+            Math.floor(Date.now()/1000) + (20*60), // 20 minutes from now
+            { gasLimit: 235953 }
+        );
+        Logger.log(addLiquidity, "<== Add VVS-USDC Liquidity successful");
+        const { hash } = addLiquidity;
+
+        Logger.log(`Waiting for ${NO_OF_BLOCK_CONFIRMATIONS} confirmations...`);
+        const txMined = await chainProvider.waitForTransaction(hash, NO_OF_BLOCK_CONFIRMATIONS);
+        Logger.log(`${NO_OF_BLOCK_CONFIRMATIONS} blocks confirmed`);
+
+        if (txMined.status !== 1) throw new Error("Mining Failed");
+        return addLiquidity;
+    } catch (error) {
+        Logger.log(error, "<== Add Liquidity Error");
+    }
+}
+
+// 4. Deposit to Farm
+const depositToFarm = async () => {
+    try {
+        // 1. Get the number of LP Available
+        const VVSLPTokenContract = await ERC20Interface(tokens.VVSLP.address);
+        const getVVSLPBalance = await VVSLPTokenContract.balanceOf(account.address);
+        Logger.log(BN2Str(getVVSLPBalance), "<== VVS LP Amount");
+        // return;
+        const response = await CraftsmanContract.deposit(POOL_ID, getVVSLPBalance);
+        Logger.log(response, "<== Deposit successful");
+        const { hash } = response;
+
+        Logger.log(`Waiting for ${NO_OF_BLOCK_CONFIRMATIONS} confirmations...`);
+        const txMined = await chainProvider.waitForTransaction(hash, NO_OF_BLOCK_CONFIRMATIONS);
+        Logger.log(`${NO_OF_BLOCK_CONFIRMATIONS} blocks confirmed`);
+
+        if (txMined.status !== 1) throw new Error("Mining Failed");
+        return { response };
+    } catch (error) {
+        Logger.log(error, "<== Deposit to Farm Error!");
+    }
+}
 
 const main = async () => {
-    // 1. First harvest from LP farm
-    // await harvestFromLp();
-    // await swapHalfVVSForUSDC();
+    try {
+        // 1. First harvest from LP farm
+        // await harvestFromFarm();
+        // 2. Swap tokens
+        await swapHalfVVSForUSDC();
+        // 3. Add Liquidity
+        await addVVSUSDCLP();
+        // 4. Deposit to Farm
+        await depositToFarm();
+    } catch(error) {
+        Logger.log(error, "<== Main Error!");
+    }
+
 }
 
-// main();
+main();
 
-const testExports = {
-    harvestFromLp,
-    swapHalfVVSForUSDC
-}
+/* const testExports = {
+    harvestFromFarm,
+    swapHalfVVSForUSDC,
+    addVVSUSDCLP,
+    depositToFarm
+} */
