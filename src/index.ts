@@ -3,9 +3,10 @@ config();
 
 import { BigNumber, BigNumberish } from 'ethers';
 import { account, chainProvider, CraftsmanContract, ERC20Interface, tokens, VVSPairInterface, VVSRouterContract } from './abis';
+import { BLOCK_CONFIRMATIONS } from './utils/config';
 import Logger from "./utils/logger";
 
-const NO_OF_BLOCK_CONFIRMATIONS = 10;
+const NO_OF_BLOCK_CONFIRMATIONS = Number(BLOCK_CONFIRMATIONS);
 
 const BN2Str = (_bn:BigNumberish) => {
     return BigNumber.from(_bn).toString();
